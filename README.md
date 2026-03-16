@@ -193,7 +193,15 @@ skillctl registry remove org/repo
 skillctl registry reset              # Reset to defaults
 ```
 
-Default registries: `anthropics/skills`, `vercel-labs/agent-skills`
+**Default registries (99 skills out of the box):**
+
+| Registry | Skills | Description |
+|----------|--------|-------------|
+| [anthropics/skills](https://github.com/anthropics/skills) | 17 | Official Anthropic skills — PDF, XLSX, PPTX, frontend design, Claude API |
+| [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) | 5 | Vercel's React, Next.js, and deployment best practices |
+| [tech-leads-club/agent-skills](https://github.com/tech-leads-club/agent-skills) | 77 | Community registry — security, CI/CD, Docker, databases, and more |
+
+Add your own with `skillctl registry add org/repo`
 
 </details>
 
