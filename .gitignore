@@ -11,3 +11,5 @@ build/
 *.so
 .DS_Store
 .claude/
+docs/landing.html
+docs/landing-v2.html

@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>skillctl — the package manager for agent skills</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0c1017;
+    --surface: #131920;
+    --surface-2: #1a2028;
+    --border: #1e2a35;
+    --border-hover: #2a3845;
+    --text: #fafafa;
+    --text-2: #a1a1aa;
+    --text-3: #52525b;
+    --green: #3fb950;
+    --green-dim: rgba(63, 185, 80, 0.12);
+    --green-glow: rgba(63, 185, 80, 0.06);
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'DM Sans', -apple-system, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 120px 0; position: relative; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes terminalBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+  @keyframes glow {
+    0%, 100% { box-shadow: 0 0 40px var(--green-glow); }
+    50% { box-shadow: 0 0 80px var(--green-dim); }
+  }
+
+  .reveal {
+    opacity: 0; transform: translateY(24px);
+    transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .reveal.visible { opacity: 1; transform: translateY(0); }
+
+  /* ── Nav ── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    padding: 16px 0; background: rgba(12, 16, 23, 0.8);
+    backdrop-filter: blur(12px); border-bottom: 1px solid transparent;
+    transition: border-color 0.3s;
+  }
+  nav.scrolled { border-bottom-color: var(--border); }
+  nav .container { display: flex; align-items: center; justify-content: space-between; }
+  .nav-logo { font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--text); text-decoration: none; }
+  .nav-logo em { color: var(--green); font-style: normal; }
+  .nav-links { display: flex; gap: 32px; align-items: center; }
+  .nav-links a { font-family: var(--mono); font-size: 13px; color: var(--text-3); text-decoration: none; transition: color 0.2s; }
+  .nav-links a:hover { color: var(--text); }
+  .nav-cta { font-family: var(--mono) !important; font-size: 13px !important; color: var(--bg) !important; background: var(--green); padding: 8px 16px; border-radius: 6px; transition: opacity 0.2s; }
+  .nav-cta:hover { opacity: 0.9; }
+
+  /* ── Hero: centered single-column ── */
+  .hero { padding: 200px 0 120px; text-align: center; }
+  .hero-inner { max-width: 720px; margin: 0 auto; animation: fadeUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12px; color: var(--green);
+    background: var(--green-dim); padding: 6px 14px; border-radius: 20px;
+    border: 1px solid rgba(63, 185, 80, 0.15); margin-bottom: 32px;
+  }
+  .hero-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .hero h1 { font-family: var(--mono); font-size: 44px; font-weight: 600; line-height: 1.25; letter-spacing: -1.5px; margin-bottom: 20px; }
+  .hero h1 em { font-style: normal; color: var(--green); }
+  .hero .subtitle { font-size: 16px; color: var(--text-2); line-height: 1.7; max-width: 520px; margin: 0 auto 40px; }
+  .hero-actions { display: flex; gap: 12px; align-items: center; justify-content: center; margin-bottom: 48px; }
+  .btn-primary { font-family: var(--mono); font-size: 14px; color: var(--bg); background: var(--green); padding: 12px 24px; border-radius: 8px; border: none; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; transition: opacity 0.2s; }
+  .btn-primary:hover { opacity: 0.9; }
+  .btn-ghost { font-family: var(--mono); font-size: 14px; color: var(--text-2); background: transparent; padding: 12px 24px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; text-decoration: none; transition: border-color 0.2s, color 0.2s; }
+  .btn-ghost:hover { border-color: var(--border-hover); color: var(--text); }
+
+  /* ── Terminal ── */
+  .terminal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; text-align: left; }
+  .terminal:hover { animation: glow 3s ease-in-out infinite; }
+  .terminal-bar { display: flex; align-items: center; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .terminal-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border-hover); }
+  .terminal-title { margin-left: 8px; font-family: var(--mono); font-size: 12px; color: var(--text-3); }
+  .terminal-body { padding: 20px; font-family: var(--mono); font-size: 13px; line-height: 1.8; }
+  .t-prompt { color: var(--green); font-weight: 600; }
+  .t-cmd { color: var(--text); font-weight: 600; }
+  .t-str { color: #d29922; }
+  .t-flag { color: #39d2c0; }
+  .t-dim { color: var(--text-3); }
+  .t-green { color: var(--green); }
+  .t-blue { color: #58a6ff; }
+  .t-cursor { display: inline-block; width: 8px; height: 16px; background: var(--green); vertical-align: text-bottom; animation: terminalBlink 1.2s infinite; }
+
+  /* ── Metrics: left-aligned ── */
+  .metrics { padding: 100px 0; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; }
+  .metric { text-align: left; }
+  .metric-value { font-family: var(--mono); font-size: 64px; font-weight: 700; color: var(--text); line-height: 1; margin-bottom: 8px; }
+  .metric-label { font-family: var(--mono); font-size: 13px; color: var(--green); letter-spacing: 0.5px; }
+  .metric-desc { font-size: 14px; color: var(--text-3); margin-top: 8px; line-height: 1.5; }
+  .section-label { font-family: var(--mono); font-size: 12px; color: var(--text-3); text-transform: uppercase; letter-spacing: 3px; margin-bottom: 32px; }
+
+  /* ── Problem ── */
+  .problem-section .container { max-width: 680px; text-align: center; }
+  .problem-section h2 { font-family: var(--mono); font-size: 32px; font-weight: 600; letter-spacing: -1px; line-height: 1.3; margin-bottom: 24px; }
+  .problem-section h2 em { font-style: normal; color: var(--green); }
+  .problem-section p { font-size: 16px; color: var(--text-2); line-height: 1.7; margin-bottom: 16px; }
+
+  /* ── Features: 2-column with snippets ── */
+  .features-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .feature { background: var(--surface); padding: 36px 32px; transition: background 0.3s; }
+  .feature:hover { background: var(--surface-2); }
+  .feature-label { font-family: var(--mono); font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+  .feature h3 { font-family: var(--mono); font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+  .feature p { font-size: 14px; color: var(--text-2); line-height: 1.6; margin-bottom: 16px; }
+  .feature-snippet { font-family: var(--mono); font-size: 12px; line-height: 1.7; padding: 12px 14px; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); }
+
+  /* ── Demo ── */
+  .demo-section h2 { font-family: var(--mono); font-size: 28px; font-weight: 600; letter-spacing: -1px; margin-bottom: 48px; }
+  .demo-section h2 em { font-style: normal; color: var(--green); }
+  .demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .demo-label { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 12px; }
+  .demo-label.human { color: var(--green); }
+  .demo-label.agent { color: #58a6ff; }
+
+  /* ── Commands: full syntax, zebra rows ── */
+  .commands-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .commands-table td { padding: 14px 16px; vertical-align: top; }
+  .commands-table td:first-child { font-family: var(--mono); color: var(--green); font-weight: 500; white-space: nowrap; padding-right: 40px; }
+  .commands-table td:last-child { color: var(--text-2); }
+  .commands-table tr:nth-child(even) td { background: var(--surface); }
+
+  /* ── CTA: three install options ── */
+  .cta-section { text-align: center; padding: 140px 0; }
+  .cta-section h2 { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--text-3); text-transform: uppercase; letter-spacing: 3px; margin-bottom: 32px; }
+  .install-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 20px; }
+  .install-box { display: inline-flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 18px; font-family: var(--mono); font-size: 14px; cursor: pointer; transition: border-color 0.2s; }
+  .install-box:hover { border-color: var(--green); }
+  .install-box .dollar { color: var(--text-3); }
+  .install-box .copy { color: var(--text-3); font-size: 12px; transition: color 0.2s; }
+  .install-box:hover .copy { color: var(--green); }
+
+  /* ── Footer ── */
+  footer { padding: 40px 0; border-top: 1px solid var(--border); }
+  footer .container { display: flex; justify-content: space-between; align-items: center; }
+  footer a { font-family: var(--mono); font-size: 13px; color: var(--text-3); text-decoration: none; transition: color 0.2s; }
+  footer a:hover { color: var(--text); }
+  .footer-links { display: flex; gap: 24px; }
+
+  @media (max-width: 900px) {
+    .hero h1 { font-size: 32px; }
+    .metrics-grid { grid-template-columns: 1fr; gap: 32px; }
+    .features-grid { grid-template-columns: 1fr; }
+    .demo-grid { grid-template-columns: 1fr; }
+    .metric-value { font-size: 48px; }
+    .hero { padding: 140px 0 80px; }
+    section { padding: 80px 0; }
+    .install-row { flex-direction: column; align-items: center; }
+  }
+</style>
+</head>
+<body>
+
+<nav id="nav">
+  <div class="container">
+    <a href="#" class="nav-logo">skill<em>ctl</em></a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#commands">Commands</a>
+      <a href="https://github.com/dvlshah/skillctl">GitHub</a>
+      <a href="https://pypi.org/project/skillctl/" class="nav-cta">Install</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══ HERO: centered, terminal below ═══ -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-inner">
+      <div class="hero-badge">v0.1.0 — now on PyPI</div>
+      <h1>The package manager<br>for agent <em>skills.</em></h1>
+      <p class="subtitle">Search, install, lint, and manage SKILL.md files from your terminal. Works with Claude, Codex, and any agent that reads markdown.</p>
+      <div class="hero-actions">
+        <a href="#install" class="btn-primary">pip install skillctl</a>
+        <a href="https://github.com/dvlshah/skillctl" class="btn-ghost">View on GitHub →</a>
+      </div>
+      <div class="terminal" style="max-width:680px; margin:0 auto;">
+        <div class="terminal-bar">
+          <div class="terminal-dot"></div><div class="terminal-dot"></div><div class="terminal-dot"></div>
+          <span class="terminal-title">SKILLCTL V0.1.0</span>
+        </div>
+        <div class="terminal-body">
+<div><span class="t-prompt">$</span> <span class="t-cmd">skillctl search</span> <span class="t-str">"pdf"</span></div>
+<br>
+<div>  <span class="t-green">●</span> <span class="t-green" style="font-weight:600">pdf-processor</span>     <span class="t-flag">local</span>     <span class="t-dim">Extract text, tables, images from PDFs</span></div>
+<div>  <span class="t-green">●</span> <span class="t-green" style="font-weight:600">pdf-forms</span>         <span class="t-flag">local</span>     <span class="t-dim">Fill and read PDF form fields</span></div>
+<div>  <span class="t-dim">○</span> <span class="t-green" style="font-weight:600">acme/pdf-toolkit</span>  <span class="t-flag">registry</span>  <span class="t-dim">Complete PDF manipulation suite</span>  <span class="t-str">★ 342</span></div>
+<div>  <span class="t-dim">○</span> <span class="t-green" style="font-weight:600">datalab/pdf-tables</span> <span class="t-flag">registry</span> <span class="t-dim">Extract tables to CSV/JSON</span> <span class="t-str">★ 218</span></div>
+<br>
+<div><span class="t-cursor"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ METRICS: left-aligned, WHY CLI > MCP ═══ -->
+<section class="metrics">
+  <div class="container">
+    <div class="section-label reveal">WHY CLI &gt; MCP</div>
+    <div class="metrics-grid">
+      <div class="metric reveal">
+        <div class="metric-value">0</div>
+        <div class="metric-label">tokens when idle</div>
+        <div class="metric-desc">No server, no protocol, no background process.</div>
+      </div>
+      <div class="metric reveal">
+        <div class="metric-value">1</div>
+        <div class="metric-label">command to install</div>
+        <div class="metric-desc">Clone, symlink, register — done in seconds.</div>
+      </div>
+      <div class="metric reveal">
+        <div class="metric-value">∞</div>
+        <div class="metric-label">LLM-compatible</div>
+        <div class="metric-desc">Every agent with bash access already knows how to use it.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PROBLEM ═══ -->
+<section class="problem-section">
+  <div class="container reveal">
+    <h2>Skills are scattered.<br><em>There's no npm for them.</em></h2>
+    <p>SKILL.md files teach agents what to do — but they're scattered across repos, folders, and Slack threads. No search. No versioning. No quality checks.</p>
+  </div>
+</section>
+
+<!-- ═══ FEATURES: 2-column, numbered, inline snippets ═══ -->
+<section id="features">
+  <div class="container">
+    <div class="section-label reveal">INSTRUMENT CLUSTER</div>
+    <div class="features-grid reveal">
+      <div class="feature">
+        <div class="feature-label">[01] Search</div>
+        <h3>Three-layer search</h3>
+        <p>Local skills, trusted registries, and GitHub — merged into one ranked table. Synonym expansion finds "xlsx" when you search "excel".</p>
+        <div class="feature-snippet">
+          <span class="t-green">●</span> <span class="t-green">pdf-processor</span> <span class="t-flag">local</span><br>
+          <span class="t-dim">○</span> <span class="t-green">acme/pdf-toolkit</span> <span class="t-flag">registry</span> <span class="t-str">★ 342</span>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-label">[02] Install</div>
+        <h3>One-command install</h3>
+        <p>Clone, symlink, register. Monorepo-aware with --path. Reference-counted clones protect siblings.</p>
+        <div class="feature-snippet">
+          <span class="t-green">✓</span> <span class="t-dim">Cloned → ~/.skillctl/repos/</span><br>
+          <span class="t-green">✓</span> <span class="t-dim">Linked → ~/.claude/skills/</span><br>
+          <span class="t-green">✓</span> <span class="t-dim">Registered in manifest</span>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-label">[03] Lint</div>
+        <h3>Skill linting</h3>
+        <p>Score a SKILL.md 0–100 against 8 quality checks. Returns specific fixes for each failing check.</p>
+        <div class="feature-snippet">
+          Score: <span class="t-green">72/100</span><br>
+          <span style="color:var(--green)">████████</span><span style="color:var(--border)">███</span>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-label">[04] Learn</div>
+        <h3>Built-in guides</h3>
+        <p>Three guides: skill anatomy, writing for AI comprehension, and directory structure. Never leave the terminal.</p>
+        <div class="feature-snippet">
+          <span class="t-green">1</span> <span class="t-dim">anatomy</span>  — The five layers<br>
+          <span class="t-green">2</span> <span class="t-dim">write</span>    — Rules for AI content<br>
+          <span class="t-green">3</span> <span class="t-dim">organize</span> — Structure & naming
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-label">[05] Agent JSON</div>
+        <h3>Agent-native output</h3>
+        <p>Every command supports --json. Responses include next_actions arrays — valid follow-up commands the agent can execute.</p>
+        <div class="feature-snippet">
+          <span class="t-dim">{</span><br>
+          &nbsp; <span class="t-blue">"next_actions"</span>: [<br>
+          &nbsp;&nbsp;&nbsp; <span class="t-str">"skillctl info pdf-toolkit"</span><br>
+          &nbsp;&nbsp;&nbsp; <span class="t-str">"skillctl list --json"</span><br>
+          &nbsp; ]<br>
+          <span class="t-dim">}</span>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-label">[06] Registries</div>
+        <h3>Trusted registries</h3>
+        <p>SHA-tracked. Only new or changed skills get re-indexed. Optional LLM enrichment at ~$0.0005/skill.</p>
+        <div class="feature-snippet">
+          <span class="t-green">anthropics/skills</span> <span class="t-dim">17 skills</span><br>
+          <span class="t-green">vercel-labs/agent-skills</span> <span class="t-dim">5 skills</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ DEMO: human vs agent ═══ -->
+<section class="demo-section">
+  <div class="container">
+    <div class="section-label reveal">HUMAN & MACHINE</div>
+    <h2 class="reveal">One CLI. <em>Two interfaces.</em></h2>
+    <div class="demo-grid">
+      <div class="reveal">
+        <div class="demo-label human">Human</div>
+        <div class="terminal">
+          <div class="terminal-bar"><div class="terminal-dot"></div><div class="terminal-dot"></div><div class="terminal-dot"></div><span class="terminal-title">terminal</span></div>
+          <div class="terminal-body">
+<div><span class="t-prompt">❯</span> <span class="t-cmd">skillctl install</span> <span class="t-blue">anthropics/skills</span> <span class="t-flag">--path</span> <span class="t-str">skills/pdf</span></div>
+<br>
+<div>  <span class="t-green">✓</span> Cloned <span class="t-blue">anthropics/skills</span></div>
+<div>  <span class="t-green">✓</span> Linked → <span class="t-str">~/.claude/skills/pdf</span></div>
+<div>  <span class="t-green">✓</span> Registered in manifest</div>
+<br>
+<div>  <span class="t-green" style="font-weight:700">Installed!</span> <span class="t-dim">Skill is now available.</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="reveal">
+        <div class="demo-label agent">Agent</div>
+        <div class="terminal">
+          <div class="terminal-bar"><div class="terminal-dot"></div><div class="terminal-dot"></div><div class="terminal-dot"></div><span class="terminal-title">agent session</span></div>
+          <div class="terminal-body">
+<div><span class="t-prompt">$</span> <span class="t-cmd">skillctl install</span> <span class="t-blue">anthropics/skills</span> \</div>
+<div>  <span class="t-flag">--path</span> <span class="t-str">skills/pdf</span> <span class="t-flag">-y</span> <span class="t-flag">--json</span></div>
+<br>
+<div><span class="t-dim">{</span></div>
+<div>  <span class="t-blue">"status"</span>: <span class="t-str">"installed"</span>,</div>
+<div>  <span class="t-blue">"path"</span>: <span class="t-str">"~/.claude/skills/pdf"</span>,</div>
+<div>  <span class="t-blue">"next_actions"</span>: [</div>
+<div>    <span class="t-str">"cat ~/.claude/skills/pdf/SKILL.md"</span></div>
+<div>  ]</div>
+<div><span class="t-dim">}</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ COMMANDS: full syntax, zebra rows ═══ -->
+<section id="commands">
+  <div class="container">
+    <div class="section-label reveal">COMMAND REFERENCE</div>
+    <table class="commands-table reveal">
+      <tr><td>skillctl search "query"</td><td>Find skills across local, registries, and GitHub</td></tr>
+      <tr><td>skillctl install user/repo</td><td>Clone, symlink, and register a skill</td></tr>
+      <tr><td>skillctl list</td><td>Show installed skills with timestamps</td></tr>
+      <tr><td>skillctl info skill-name</td><td>Detailed skill card — author, tags, repo, status</td></tr>
+      <tr><td>skillctl create my-skill</td><td>Scaffold a new SKILL.md from template</td></tr>
+      <tr><td>skillctl update --all</td><td>Pull latest for git-installed skills</td></tr>
+      <tr><td>skillctl remove skill-name</td><td>Uninstall with reference-counted cleanup</td></tr>
+      <tr><td>skillctl lint skill-name</td><td>Score a skill 0–100 against 8 quality checks</td></tr>
+      <tr><td>skillctl learn</td><td>Built-in guides: anatomy, writing, organizing skills</td></tr>
+      <tr><td>skillctl registry</td><td>Manage trusted skill registries</td></tr>
+      <tr><td>skillctl config</td><td>View and set configuration</td></tr>
+      <tr><td>skillctl schema</td><td>Dump full CLI schema as JSON for agents</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ═══ CTA: three install options ═══ -->
+<section class="cta-section" id="install">
+  <div class="container reveal">
+    <h2>GET STARTED</h2>
+    <div class="install-row">
+      <div class="install-box" onclick="navigator.clipboard.writeText('pip install skillctl'); this.querySelector('.copy').textContent='✓'">
+        <span class="dollar">$</span><span>pip install skillctl</span><span class="copy">⧉</span>
+      </div>
+      <div class="install-box" onclick="navigator.clipboard.writeText('pipx install skillctl'); this.querySelector('.copy').textContent='✓'">
+        <span class="dollar">$</span><span>pipx install skillctl</span><span class="copy">⧉</span>
+      </div>
+      <div class="install-box" onclick="navigator.clipboard.writeText('pip install &quot;skillctl[enrich]&quot;'); this.querySelector('.copy').textContent='✓'">
+        <span class="dollar">$</span><span>pip install "skillctl[enrich]"</span><span class="copy">⧉</span>
+      </div>
+    </div>
+    <p style="color:var(--text-3); font-size:14px;">
+      Then run <span style="color:var(--green); font-family:var(--mono)">skillctl learn</span> to get started.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div>
+      <a href="#" class="nav-logo" style="font-size:14px;">skill<em style="color:var(--green);font-style:normal">ctl</em></a>
+      <span style="color:var(--text-3); font-family:var(--mono); font-size:13px; margin-left:12px;">MIT License</span>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/dvlshah/skillctl">GitHub</a>
+      <a href="https://pypi.org/project/skillctl/">PyPI</a>
+      <a href="#">LinkedIn</a>
+      <a href="#">Medium</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  const nav = document.getElementById('nav');
+  window.addEventListener('scroll', () => nav.classList.toggle('scrolled', window.scrollY > 20));
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry, i) => {
+      if (entry.isIntersecting) {
+        setTimeout(() => entry.target.classList.add('visible'), i * 100);
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1 });
+
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+
+</body>
+</html>
