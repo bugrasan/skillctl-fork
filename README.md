@@ -1,23 +1,16 @@
 <div align="center">
 
-```
-         __   _ ____     __  __
-   _____/ /__(_) / /____/ /_/ /
-  / ___/ //_/ / / / ___/ __/ /
- (__  ) ,< / / / / /__/ /_/ /
-/____/_/|_/_/_/_/\___/\__/_/
+<h1>skill<em>ctl</em></h1>
 
-        > manage agent skills _
-```
+<p><strong>The package manager for agent skills.</strong></p>
 
-**The package manager for agent skills.**
-
-Search, install, and manage SKILL.md files.<br>
-Stateless, zero-config, and token-efficient.
+<p>Search, install, and manage SKILL.md files.<br>
+Stateless, zero-config, and token-efficient.</p>
 
 [![PyPI](https://img.shields.io/pypi/v/skillctl)](https://pypi.org/project/skillctl/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/skillctl)](https://pypi.org/project/skillctl/)
 [![License: MIT](https://img.shields.io/pypi/l/skillctl)](LICENSE)
+[![CI](https://github.com/dvlshah/skillctl/actions/workflows/ci.yml/badge.svg)](https://github.com/dvlshah/skillctl/actions/workflows/ci.yml)
 
 </div>
 
