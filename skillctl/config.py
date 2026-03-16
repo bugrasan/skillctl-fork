@@ -16,6 +16,7 @@ DEFAULT_REPOS_DIR = SKILLCTL_DIR / "repos"
 DEFAULT_REGISTRIES = [
     "anthropics/skills",
     "vercel-labs/agent-skills",
+    "tech-leads-club/agent-skills",
 ]
 
 VALID_KEYS = [
