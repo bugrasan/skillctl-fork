@@ -17,6 +17,7 @@ DEFAULT_REGISTRIES = [
     "anthropics/skills",
     "vercel-labs/agent-skills",
     "tech-leads-club/agent-skills",
+    "ComposioHQ/awesome-claude-skills",
 ]
 
 VALID_KEYS = [
