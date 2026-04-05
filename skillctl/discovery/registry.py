@@ -41,12 +41,14 @@ def _fetch_skill_md_raw(
     registry: str,
     skill_path: str,
     branch: str = "main",
+    headers: Optional[dict] = None,
 ) -> Optional[str]:
     url = f"https://raw.githubusercontent.com/{registry}/{branch}/{skill_path}"
+    req_headers = {"User-Agent": f"skillctl/{__version__}"}
+    if headers and "Authorization" in headers:
+        req_headers["Authorization"] = headers["Authorization"]
     try:
-        resp = client.get(
-            url, headers={"User-Agent": f"skillctl/{__version__}"}
-        )
+        resp = client.get(url, headers=req_headers)
         if resp.status_code == 200:
             return resp.text
     except (httpx.HTTPError, httpx.TimeoutException):
@@ -219,7 +221,7 @@ def validate_registry(config: Config, repo: str) -> dict:
             # 3. Spot-check: fetch first SKILL.md and validate frontmatter
             sample_path = skill_paths[0]
             raw = _fetch_skill_md_raw(
-                client, repo, sample_path, branch
+                client, repo, sample_path, branch, headers=headers
             )
             if raw:
                 meta = _parse_skill_frontmatter(raw)
@@ -338,7 +340,7 @@ def fetch_registry(config: Config, registry: str) -> list[dict]:
 
                 # New or changed skill — fetch content
                 raw = _fetch_skill_md_raw(
-                    client, registry, skill_path, branch
+                    client, registry, skill_path, branch, headers=headers
                 )
                 if not raw:
                     continue
