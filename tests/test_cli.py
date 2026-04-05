@@ -358,6 +358,115 @@ class TestRemove:
         assert manifest.is_installed("skill-b")
         assert not manifest.is_installed("skill-a")
 
+    def test_remove_multiple_with_yes(self, skill_env):
+        """Batch remove: remove 3 skills at once."""
+        for name in ("rm-a", "rm-b", "rm-c"):
+            runner.invoke(
+                app, ["create", name, "--name", name.upper(), "-y"]
+            )
+            assert manifest.is_installed(name)
+
+        result = runner.invoke(
+            app, ["remove", "rm-a", "rm-b", "rm-c", "-y"]
+        )
+        assert result.exit_code == 0
+        for name in ("rm-a", "rm-b", "rm-c"):
+            assert not manifest.is_installed(name)
+
+    def test_remove_multiple_json(self, skill_env):
+        """Batch remove JSON output uses results array."""
+        for name in ("mj-a", "mj-b"):
+            runner.invoke(
+                app, ["create", name, "--name", name.upper(), "-y"]
+            )
+
+        result = runner.invoke(
+            app, ["remove", "mj-a", "mj-b", "-y", "--json"]
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "results" in data
+        assert len(data["results"]) == 2
+        assert all(r["status"] == "removed" for r in data["results"])
+
+    def test_remove_single_json_backward_compat(self, skill_env):
+        """Single-skill remove JSON keeps flat object (no results array)."""
+        runner.invoke(
+            app, ["create", "bc-skill", "--name", "BC", "-y"]
+        )
+        result = runner.invoke(
+            app, ["remove", "bc-skill", "-y", "--json"]
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "removed"
+        assert "results" not in data
+
+    def test_remove_multiple_partial_not_found(self, skill_env):
+        """Batch remove: 1 of 3 not found → skip, exit 1."""
+        runner.invoke(
+            app, ["create", "pf-a", "--name", "PF", "-y"]
+        )
+        runner.invoke(
+            app, ["create", "pf-b", "--name", "PF", "-y"]
+        )
+
+        result = runner.invoke(
+            app, ["remove", "pf-a", "ghost", "pf-b", "-y"]
+        )
+        assert result.exit_code == 1
+        assert not manifest.is_installed("pf-a")
+        assert not manifest.is_installed("pf-b")
+
+    def test_remove_multiple_shared_clone(self, skill_env):
+        """Batch remove: 2 skills from same clone — clone deleted after last."""
+        clone_dir = skill_env["repos_dir"] / "org__monorepo"
+        clone_dir.mkdir(parents=True)
+        clone_path = str(clone_dir)
+
+        manifest.add_skill("mc-a", {
+            "slug": "mc-a",
+            "source": "github",
+            "repo": "org/monorepo",
+            "path": str(skill_env["skills_dir"] / "mc-a"),
+            "clone_path": clone_path,
+            "sub_path": "skills/a",
+        })
+        manifest.add_skill("mc-b", {
+            "slug": "mc-b",
+            "source": "github",
+            "repo": "org/monorepo",
+            "path": str(skill_env["skills_dir"] / "mc-b"),
+            "clone_path": clone_path,
+            "sub_path": "skills/b",
+        })
+
+        result = runner.invoke(
+            app, ["remove", "mc-a", "mc-b", "-y", "--json"]
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data["results"]) == 2
+        # First removal keeps clone (mc-b still exists at that point)
+        assert data["results"][0]["clone_kept"] is True
+        # Second removal deletes clone (no siblings left)
+        assert "clone_kept" not in data["results"][1]
+        assert not manifest.is_installed("mc-a")
+        assert not manifest.is_installed("mc-b")
+
+    def test_remove_deduplicates_names(self, skill_env):
+        """Duplicate names are deduplicated."""
+        runner.invoke(
+            app, ["create", "dup-skill", "--name", "DUP", "-y"]
+        )
+
+        result = runner.invoke(
+            app, ["remove", "dup-skill", "dup-skill", "-y"]
+        )
+        # Second occurrence is deduplicated, so only one removal
+        assert result.exit_code == 0
+        assert not manifest.is_installed("dup-skill")
+
 
 class TestInstall:
     def test_install_invalid_repo_format(self, skill_env):
@@ -388,6 +497,61 @@ class TestInstall:
         result = runner.invoke(
             app,
             ["install", "user/repo", "--dry-run", "--json"],
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["dry_run"] is True
+        assert len(data["actions"]) == 3
+
+    def test_install_multi_path_dry_run(self, skill_env):
+        """Multi-path dry-run lists actions for all paths."""
+        result = runner.invoke(
+            app,
+            [
+                "install", "user/monorepo", "--dry-run",
+                "--path", "skills/a",
+                "--path", "skills/b",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.output
+
+    def test_install_multi_path_dry_run_json(self, skill_env):
+        """Multi-path dry-run JSON has clone + symlink actions for each path."""
+        result = runner.invoke(
+            app,
+            [
+                "install", "user/monorepo", "--dry-run", "--json",
+                "--path", "skills/a",
+                "--path", "skills/b",
+            ],
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["dry_run"] is True
+        # 1 clone + 2 symlinks + 2 registers = 5 actions
+        assert len(data["actions"]) == 5
+        assert data["actions"][0]["action"] == "clone"
+        symlink_actions = [a for a in data["actions"] if a["action"] == "symlink"]
+        assert len(symlink_actions) == 2
+
+    def test_install_multi_path_slug_collision(self, skill_env):
+        """Multi-path with duplicate slugs is rejected up-front."""
+        result = runner.invoke(
+            app,
+            [
+                "install", "user/monorepo", "--dry-run",
+                "--path", "skills/a/utils",
+                "--path", "services/b/utils",
+            ],
+        )
+        assert result.exit_code == 2
+
+    def test_install_single_path_backward_compat(self, skill_env):
+        """Single --path dry-run still produces 3 actions (same as before)."""
+        result = runner.invoke(
+            app,
+            ["install", "user/repo", "--dry-run", "--json", "--path", "skills/a"],
         )
         assert result.exit_code == 0
         data = json.loads(result.output)

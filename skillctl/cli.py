@@ -286,7 +286,7 @@ def schema(
                     },
                 },
                 "flags": {
-                    "--path": {"type": "string"},
+                    "--path": {"type": "list[string]", "description": "Subdirectory for monorepos (repeat for multiple)"},
                     "--dry-run": {"type": "bool"},
                     "--json": {"type": "bool"},
                     "--yes": {"type": "bool"},
@@ -332,9 +332,9 @@ def schema(
                 },
             },
             "remove": {
-                "description": "Remove an installed skill",
+                "description": "Remove one or more installed skills",
                 "args": {
-                    "name": {"type": "string", "required": True},
+                    "names": {"type": "list[string]", "required": True, "min_items": 1},
                 },
                 "flags": {
                     "--yes": {"type": "bool"},
@@ -604,8 +604,8 @@ def install(
         str, typer.Argument(help="GitHub repo (user/repo format)")
     ],
     path: Annotated[
-        Optional[str],
-        typer.Option("--path", help="Subdirectory for monorepos"),
+        Optional[list[str]],
+        typer.Option("--path", help="Subdirectory for monorepos (repeat for multiple)"),
     ] = None,
     dry_run: Annotated[
         bool,
@@ -635,133 +635,287 @@ def install(
         )
         raise typer.Exit(2)
 
+    # Normalize paths: None → [] for uniform handling
+    paths: list[str] = list(path) if path else []
+    is_batch = len(paths) > 1
+
+    # Slug collision detection for multi-path
+    if is_batch:
+        slugs = [Path(p).name for p in paths]
+        seen_slugs: dict[str, str] = {}
+        for p, s in zip(paths, slugs):
+            if s in seen_slugs:
+                print_error(
+                    f"Slug collision: --path {p} and --path {seen_slugs[s]}"
+                    f" both resolve to slug '{s}'."
+                    " Install them separately to use custom names.",
+                    json_output=json_output,
+                    code=2,
+                )
+                raise typer.Exit(2)
+            seen_slugs[s] = p
+
     config = load_config()
-    slug = Path(path).name if path else repo.split("/")[1]
     repo_dir_name = _repo_slug(repo)
     clone_path = config.repos_path / repo_dir_name
-    skill_source = clone_path / path if path else clone_path
-    symlink_target = config.skills_path / slug
 
-    # Already installed — try to update
-    existing = manifest.get_skill(slug)
-    if existing:
-        _handle_reinstall(
-            slug, clone_path, existing, json_output, quiet,
-            token=config.github_token,
+    # ── Single path (or no path) — original behavior ──
+    if not is_batch:
+        single_path = paths[0] if paths else None
+        slug = Path(single_path).name if single_path else repo.split("/")[1]
+        skill_source = clone_path / single_path if single_path else clone_path
+        symlink_target = config.skills_path / slug
+
+        # Already installed — try to update
+        existing = manifest.get_skill(slug)
+        if existing:
+            _handle_reinstall(
+                slug, clone_path, existing, json_output, quiet,
+                token=config.github_token,
+            )
+            return
+
+        # Dry-run
+        if dry_run:
+            _install_dry_run(
+                repo, clone_path, skill_source, symlink_target, slug,
+                json_output,
+            )
+            return
+
+        # Clone — clean stale clone dir if it exists but isn't tracked
+        if clone_path.exists() and not manifest.get_skill(slug):
+            remove_clone(clone_path)
+
+        try:
+            clone_path.parent.mkdir(parents=True, exist_ok=True)
+            commit = clone_repo(repo, clone_path, token=config.github_token)
+            if not json_output and not quiet:
+                print_success(
+                    f"Cloned [blue]{repo}[/] → [dim]{clone_path}[/]"
+                )
+        except RuntimeError as e:
+            print_error(str(e), json_output=json_output, code=2)
+            raise typer.Exit(2)
+        except PermissionError:
+            print_error(
+                f"Cannot clone to {clone_path}",
+                json_output=json_output,
+                code=1,
+                hint=f"Permission denied on {config.repos_path}",
+            )
+            raise typer.Exit(1)
+
+        # Verify skill source path exists
+        if not skill_source.exists():
+            msg = (
+                f"Path not found in repo: {single_path}"
+                if single_path
+                else "Clone succeeded but directory is empty"
+            )
+            print_error(msg, json_output=json_output, code=2)
+            remove_clone(clone_path)
+            raise typer.Exit(2)
+
+        # Symlink
+        try:
+            config.skills_path.mkdir(parents=True, exist_ok=True)
+            create_symlink(skill_source, symlink_target)
+            if not json_output and not quiet:
+                print_success(f"Linked → [yellow]{symlink_target}[/]")
+        except PermissionError:
+            print_error(
+                f"Cannot create symlink: {symlink_target}",
+                json_output=json_output,
+                code=1,
+                hint=(
+                    "Permission denied. Try:\n"
+                    "  skillctl config set skills_dir ~/my-skills"
+                ),
+            )
+            remove_clone(clone_path)
+            raise typer.Exit(1)
+
+        # Count and validate SKILL.md presence
+        skill_mds = list(skill_source.rglob("SKILL.md"))
+        if not skill_mds:
+            if not json_output and not quiet:
+                print_warning(
+                    f"No SKILL.md found in {repo}."
+                    " This repo may not be a valid skill."
+                )
+
+        # Register
+        manifest.add_skill(
+            slug,
+            {
+                "name": slug,
+                "slug": slug,
+                "source": "github",
+                "repo": repo,
+                "path": str(symlink_target),
+                "clone_path": str(clone_path),
+                "sub_path": single_path or ".",
+                "commit": commit,
+                "skills_count": len(skill_mds),
+            },
         )
+
+        if not json_output and not quiet:
+            console.print(
+                InstallReceipt(
+                    repo=repo,
+                    clone_path=str(clone_path),
+                    symlink_path=str(symlink_target),
+                    commit=commit,
+                    skill_count=len(skill_mds),
+                )
+            )
+        elif json_output:
+            result = {
+                "status": "installed",
+                "name": slug,
+                "source": repo,
+                "path": str(symlink_target),
+                "skill_md": str(symlink_target / "SKILL.md"),
+                "commit": commit,
+            }
+            next_actions = [
+                f"cat {symlink_target / 'SKILL.md'}",
+                f"skillctl info {slug} --json",
+                "skillctl list --json",
+            ]
+            print_json(result, next_actions=next_actions)
         return
 
-    # Dry-run
+    # ── Multi-path batch install ──
+
+    # Dry-run for batch
     if dry_run:
-        _install_dry_run(
-            repo, clone_path, skill_source, symlink_target, slug,
-            json_output,
-        )
+        _install_dry_run_batch(repo, clone_path, paths, config, json_output)
         return
 
-    # Clone — clean stale clone dir if it exists but isn't tracked
-    if clone_path.exists() and not manifest.get_skill(slug):
-        remove_clone(clone_path)
-
-    try:
-        clone_path.parent.mkdir(parents=True, exist_ok=True)
-        commit = clone_repo(repo, clone_path, token=config.github_token)
-        if not json_output and not quiet:
-            print_success(
-                f"Cloned [blue]{repo}[/] → [dim]{clone_path}[/]"
+    # Clone once — reuse existing clone if any skill already references it
+    clone_existed = clone_path.exists()
+    commit = "unknown"
+    if not clone_existed:
+        try:
+            clone_path.parent.mkdir(parents=True, exist_ok=True)
+            commit = clone_repo(repo, clone_path, token=config.github_token)
+            if not json_output and not quiet:
+                print_success(
+                    f"Cloned [blue]{repo}[/] → [dim]{clone_path}[/]"
+                )
+        except RuntimeError as e:
+            print_error(str(e), json_output=json_output, code=2)
+            raise typer.Exit(2)
+        except PermissionError:
+            print_error(
+                f"Cannot clone to {clone_path}",
+                json_output=json_output,
+                code=1,
+                hint=f"Permission denied on {config.repos_path}",
             )
-    except RuntimeError as e:
-        print_error(str(e), json_output=json_output, code=2)
-        raise typer.Exit(2)
-    except PermissionError:
-        print_error(
-            f"Cannot clone to {clone_path}",
-            json_output=json_output,
-            code=1,
-            hint=f"Permission denied on {config.repos_path}",
-        )
-        raise typer.Exit(1)
-
-    # Verify skill source path exists
-    if not skill_source.exists():
-        msg = (
-            f"Path not found in repo: {path}"
-            if path
-            else "Clone succeeded but directory is empty"
-        )
-        print_error(msg, json_output=json_output, code=2)
-        remove_clone(clone_path)
-        raise typer.Exit(2)
-
-    # Symlink
-    try:
-        config.skills_path.mkdir(parents=True, exist_ok=True)
-        create_symlink(skill_source, symlink_target)
+            raise typer.Exit(1)
+    else:
+        # Reuse existing clone — get current commit
+        from .importer.git_ops import get_commit_sha
+        commit = get_commit_sha(clone_path)
         if not json_output and not quiet:
-            print_success(f"Linked → [yellow]{symlink_target}[/]")
-    except PermissionError:
-        print_error(
-            f"Cannot create symlink: {symlink_target}",
-            json_output=json_output,
-            code=1,
-            hint=(
-                "Permission denied. Try:\n"
-                "  skillctl config set skills_dir ~/my-skills"
-            ),
-        )
-        remove_clone(clone_path)
-        raise typer.Exit(1)
+            print_info(
+                f"Reusing existing clone of [blue]{repo}[/] ({commit})"
+            )
 
-    # Count and validate SKILL.md presence
-    skill_mds = list(skill_source.rglob("SKILL.md"))
-    if not skill_mds:
-        if not json_output and not quiet:
+    # Install each path
+    results: list[dict] = []
+    config.skills_path.mkdir(parents=True, exist_ok=True)
+
+    for p in paths:
+        slug = Path(p).name
+        skill_source = clone_path / p
+        symlink_target = config.skills_path / slug
+
+        # Already installed — skip (don't pull in batch to avoid version drift)
+        existing = manifest.get_skill(slug)
+        if existing:
+            r = {"status": "already_installed", "name": slug}
+            results.append(r)
+            if not json_output and not quiet:
+                print_info(f"Already installed: {slug} (skipped)")
+            continue
+
+        # Verify path exists in clone
+        if not skill_source.exists():
+            r = {"status": "error", "name": slug, "message": f"Path not found in repo: {p}"}
+            results.append(r)
+            if not json_output:
+                print_error(f"Path not found in repo: {p}")
+            continue
+
+        # Symlink
+        try:
+            create_symlink(skill_source, symlink_target)
+            if not json_output and not quiet:
+                print_success(f"Linked [blue]{slug}[/] → [yellow]{symlink_target}[/]")
+        except PermissionError:
+            r = {"status": "error", "name": slug, "message": f"Permission denied: {symlink_target}"}
+            results.append(r)
+            if not json_output:
+                print_error(f"Cannot create symlink: {symlink_target}")
+            continue
+
+        # Count SKILL.md files
+        skill_mds = list(skill_source.rglob("SKILL.md"))
+        if not skill_mds and not json_output and not quiet:
             print_warning(
-                f"No SKILL.md found in {repo}."
-                " This repo may not be a valid skill."
+                f"No SKILL.md found in {p}."
+                " This path may not be a valid skill."
             )
 
-    # Register
-    manifest.add_skill(
-        slug,
-        {
-            "name": slug,
-            "slug": slug,
-            "source": "github",
-            "repo": repo,
-            "path": str(symlink_target),
-            "clone_path": str(clone_path),
-            "sub_path": path or ".",
-            "commit": commit,
-            "skills_count": len(skill_mds),
-        },
-    )
-
-    if not json_output and not quiet:
-        console.print(
-            InstallReceipt(
-                repo=repo,
-                clone_path=str(clone_path),
-                symlink_path=str(symlink_target),
-                commit=commit,
-                skill_count=len(skill_mds),
-            )
+        # Register
+        manifest.add_skill(
+            slug,
+            {
+                "name": slug,
+                "slug": slug,
+                "source": "github",
+                "repo": repo,
+                "path": str(symlink_target),
+                "clone_path": str(clone_path),
+                "sub_path": p,
+                "commit": commit,
+                "skills_count": len(skill_mds),
+            },
         )
-    elif json_output:
-        result = {
+        results.append({
             "status": "installed",
             "name": slug,
             "source": repo,
             "path": str(symlink_target),
-            "skill_md": str(symlink_target / "SKILL.md"),
             "commit": commit,
-        }
-        next_actions = [
-            f"cat {symlink_target / 'SKILL.md'}",
-            f"skillctl info {slug} --json",
-            "skillctl list --json",
-        ]
-        print_json(result, next_actions=next_actions)
+        })
+
+    # Clean up clone if nothing was installed from it (and we created it)
+    if not clone_existed:
+        any_installed = any(r["status"] == "installed" for r in results)
+        if not any_installed:
+            remove_clone(clone_path)
+
+    # Output
+    installed = sum(1 for r in results if r["status"] == "installed")
+    failed = sum(1 for r in results if r["status"] == "error")
+
+    if json_output:
+        print_json({"results": results})
+    elif not quiet:
+        console.print(
+            f"\n  [dim]{installed} installed,"
+            f" {len(results) - installed - failed} skipped,"
+            f" {failed} failed[/]\n"
+        )
+
+    if failed:
+        raise typer.Exit(1)
 
 
 def _handle_reinstall(
@@ -837,6 +991,35 @@ def _install_dry_run(
         },
         {"action": "register", "name": slug},
     ]
+    if json_output:
+        print_json({"dry_run": True, "actions": actions})
+    else:
+        console.print(DryRunPreview(actions))
+
+
+def _install_dry_run_batch(
+    repo: str,
+    clone_path: Path,
+    paths: list[str],
+    config: object,
+    json_output: bool,
+) -> None:
+    """Show dry-run preview for batch install."""
+    from .renderables import DryRunPreview
+
+    actions: list[dict] = [
+        {"action": "clone", "repo": repo, "dest": str(clone_path)},
+    ]
+    for p in paths:
+        slug = Path(p).name
+        skill_source = clone_path / p
+        symlink_target = config.skills_path / slug  # type: ignore[union-attr]
+        actions.append({
+            "action": "symlink",
+            "source": str(skill_source),
+            "target": str(symlink_target),
+        })
+        actions.append({"action": "register", "name": slug})
     if json_output:
         print_json({"dry_run": True, "actions": actions})
     else:
@@ -1137,39 +1320,21 @@ def update(
 # ══════════════════════════════════════════════
 
 
-@app.command()
-def remove(
-    name: Annotated[
-        str,
-        typer.Argument(
-            help="Skill to remove",
-            autocompletion=_installed_names,
-        ),
-    ],
-    yes: Annotated[
-        bool, typer.Option("--yes", "-y", help="Skip confirmation")
-    ] = False,
-    dry_run: Annotated[
-        bool,
-        typer.Option("--dry-run", help="Preview without executing"),
-    ] = False,
-    json_output: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
-):
-    """Remove an installed skill."""
+def _remove_one(
+    name: str,
+    dry_run: bool,
+) -> dict:
+    """Remove a single skill. Returns a result dict.
+
+    Handles symlink removal, clone cleanup (with reference counting),
+    and manifest unregistration. Used by the ``remove`` command to
+    process each skill in a batch.
+    """
     from .importer.linker import remove_clone, remove_symlink
-    from .renderables import DryRunPreview
 
     skill = manifest.get_skill(name)
-
     if not skill:
-        print_error(
-            f"Skill not found: {name}",
-            json_output=json_output,
-            code=2,
-        )
-        raise typer.Exit(2)
+        return {"name": name, "status": "not_found"}
 
     symlink_path = Path(skill.get("path", ""))
     clone_path = (
@@ -1180,9 +1345,7 @@ def remove(
     clone_shared = False
     siblings: list[str] = []
     if clone_path and skill.get("clone_path"):
-        siblings = _skills_sharing_clone(
-            skill["clone_path"], name
-        )
+        siblings = _skills_sharing_clone(skill["clone_path"], name)
         clone_shared = len(siblings) > 0
 
     actions = []
@@ -1202,47 +1365,8 @@ def remove(
         )
     actions.append({"action": "unregister", "name": name})
 
-    # Dry-run
     if dry_run:
-        if json_output:
-            print_json({"dry_run": True, "actions": actions})
-        else:
-            console.print(
-                "\n  [purple]DRY RUN[/]"
-                " [dim]— no changes will be made[/]"
-            )
-            for a in actions:
-                target = a.get("path", a.get("name", ""))
-                console.print(
-                    f"  [dim]Would {a['action']}[/] {target}"
-                )
-            console.print()
-        return
-
-    # Confirm
-    if not yes and not json_output:
-        console.print("\n  [dim]This will:[/]")
-        if symlink_path.is_symlink():
-            console.print(
-                f"    [dim]• Remove symlink from[/]"
-                f" [yellow]{symlink_path}[/]"
-            )
-        if clone_path and clone_path.exists() and not clone_shared:
-            console.print(
-                f"    [dim]• Delete clone from[/]"
-                f" [yellow]{clone_path}[/]"
-            )
-        elif clone_shared:
-            console.print(
-                f"    [dim]• Keep clone[/] [yellow]{clone_path}[/]"
-                f" [dim]({len(siblings)} other skill(s) use it)[/]"
-            )
-        console.print("    [dim]• Remove from manifest[/]")
-        console.print()
-
-        if not typer.confirm("  Continue?", default=False):
-            console.print("  [dim]Cancelled.[/]")
-            raise typer.Exit(0)
+        return {"name": name, "status": "dry_run", "actions": actions}
 
     # Execute
     if symlink_path.is_symlink():
@@ -1260,30 +1384,137 @@ def remove(
 
     manifest.remove_skill(name)
 
-    if json_output:
-        result: dict = {"status": "removed", "name": name}
-        if clone_shared:
-            result["clone_kept"] = True
-            result["reason"] = (
-                f"{len(siblings)} other skill(s) installed"
-                f" from same repo: {', '.join(siblings)}"
+    result: dict = {"name": name, "status": "removed"}
+    if clone_shared:
+        result["clone_kept"] = True
+        result["reason"] = (
+            f"{len(siblings)} other skill(s) installed"
+            f" from same repo: {', '.join(siblings)}"
+        )
+    if files_remain:
+        result["note"] = f"Files remain at {symlink_path}"
+    return result
+
+
+@app.command()
+def remove(
+    names: Annotated[
+        list[str],
+        typer.Argument(
+            help="Skill(s) to remove",
+            autocompletion=_installed_names,
+        ),
+    ],
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip confirmation")
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Preview without executing"),
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output as JSON")
+    ] = False,
+):
+    """Remove one or more installed skills."""
+    from .renderables import DryRunPreview
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_names: list[str] = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            unique_names.append(n)
+    names = unique_names
+
+    is_batch = len(names) > 1
+
+    # Dry-run
+    if dry_run:
+        all_actions: list[dict] = []
+        for name in names:
+            r = _remove_one(name, dry_run=True)
+            if r["status"] == "not_found":
+                all_actions.append(
+                    {"action": "skip", "name": name, "reason": "not found"}
+                )
+            else:
+                all_actions.extend(r.get("actions", []))
+        if json_output:
+            print_json({"dry_run": True, "actions": all_actions})
+        else:
+            console.print(
+                "\n  [purple]DRY RUN[/]"
+                " [dim]— no changes will be made[/]"
             )
-        if files_remain:
-            result["note"] = f"Files remain at {symlink_path}"
-        print_json(result)
-    else:
-        print_success(f"Removed [blue]{name}[/]")
-        if clone_shared:
-            print_dim(
-                f"Clone kept at [yellow]{clone_path}[/]"
-                f" [dim]({len(siblings)} other skill(s) use it)[/]"
-            )
-        if files_remain:
-            print_dim(
-                f"Files remain at [yellow]{symlink_path}[/]"
-                " (local skill — not deleted)"
-            )
+            for a in all_actions:
+                target = a.get("path", a.get("name", ""))
+                console.print(
+                    f"  [dim]Would {a['action']}[/] {target}"
+                )
+            console.print()
+        return
+
+    # Confirm (combined prompt for all skills)
+    if not yes and not json_output:
+        console.print(
+            f"\n  [dim]This will remove"
+            f" {len(names)} skill(s):[/]"
+        )
+        for name in names:
+            skill = manifest.get_skill(name)
+            if not skill:
+                console.print(
+                    f"    [dim]• [red]{name}[/red] — not found (will skip)[/]"
+                )
+                continue
+            console.print(f"    [dim]•[/] [blue]{name}[/]")
         console.print()
+
+        if not typer.confirm("  Continue?", default=False):
+            console.print("  [dim]Cancelled.[/]")
+            raise typer.Exit(0)
+
+    # Execute
+    results: list[dict] = []
+    for name in names:
+        r = _remove_one(name, dry_run=False)
+        results.append(r)
+
+        # Per-skill output for non-JSON
+        if not json_output:
+            if r["status"] == "not_found":
+                print_error(f"Skill not found: {name}", code=2)
+            else:
+                print_success(f"Removed [blue]{name}[/]")
+                if r.get("clone_kept"):
+                    print_dim(
+                        f"Clone kept [dim]({r['reason']})[/]"
+                    )
+                if r.get("note"):
+                    print_dim(r["note"])
+
+    has_failures = any(r["status"] != "removed" for r in results)
+
+    if json_output:
+        if is_batch:
+            print_json({"results": results})
+        else:
+            # Backward compat: single skill returns flat object
+            print_json(results[0])
+
+    if not json_output and is_batch:
+        removed = sum(1 for r in results if r["status"] == "removed")
+        failed = len(results) - removed
+        console.print(
+            f"\n  [dim]{removed} removed, {failed} failed[/]\n"
+        )
+
+    if has_failures:
+        # Exit 2 when all items are not_found (matches single-skill behavior)
+        all_not_found = all(r["status"] == "not_found" for r in results)
+        raise typer.Exit(2 if all_not_found else 1)
 
 
 # ══════════════════════════════════════════════
