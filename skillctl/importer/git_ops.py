@@ -1,15 +1,24 @@
 """Git operations — clone, pull, get commit SHA."""
 
+import base64
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 
-def clone_repo(repo: str, dest: Path) -> str:
+def clone_repo(repo: str, dest: Path, token: Optional[str] = None) -> str:
     """Clone a GitHub repo (shallow). Returns the commit SHA."""
     url = f"https://github.com/{repo}.git"
+    cmd = ["git"]
+    if token:
+        basic = base64.b64encode(
+            f"x-access-token:{token}".encode()
+        ).decode()
+        cmd += ["-c", f"http.extraheader=Authorization: Basic {basic}"]
+    cmd += ["clone", "--depth", "1", url, str(dest)]
 
     result = subprocess.run(
-        ["git", "clone", "--depth", "1", url, str(dest)],
+        cmd,
         capture_output=True,
         text=True,
         timeout=120,
@@ -24,13 +33,20 @@ def clone_repo(repo: str, dest: Path) -> str:
     return get_commit_sha(dest)
 
 
-def pull_repo(repo_path: Path) -> tuple[str, str]:
+def pull_repo(repo_path: Path, token: Optional[str] = None) -> tuple[str, str]:
     """Pull latest changes. Returns (old_sha, new_sha)."""
     old_sha = get_commit_sha(repo_path)
 
-    # Unshallow if needed for pull to work
+    cmd = ["git"]
+    if token:
+        basic = base64.b64encode(
+            f"x-access-token:{token}".encode()
+        ).decode()
+        cmd += ["-c", f"http.extraheader=Authorization: Basic {basic}"]
+    cmd += ["-C", str(repo_path), "pull", "--ff-only"]
+
     result = subprocess.run(
-        ["git", "-C", str(repo_path), "pull", "--ff-only"],
+        cmd,
         capture_output=True,
         text=True,
         timeout=120,

@@ -646,7 +646,8 @@ def install(
     existing = manifest.get_skill(slug)
     if existing:
         _handle_reinstall(
-            slug, clone_path, existing, json_output, quiet
+            slug, clone_path, existing, json_output, quiet,
+            token=config.github_token,
         )
         return
 
@@ -664,7 +665,7 @@ def install(
 
     try:
         clone_path.parent.mkdir(parents=True, exist_ok=True)
-        commit = clone_repo(repo, clone_path)
+        commit = clone_repo(repo, clone_path, token=config.github_token)
         if not json_output and not quiet:
             print_success(
                 f"Cloned [blue]{repo}[/] → [dim]{clone_path}[/]"
@@ -769,6 +770,7 @@ def _handle_reinstall(
     existing: dict,
     json_output: bool,
     quiet: bool,
+    token: Optional[str] = None,
 ) -> None:
     """Handle re-install of an already installed skill."""
     from .importer.git_ops import is_git_repo, pull_repo
@@ -777,7 +779,7 @@ def _handle_reinstall(
         if not json_output and not quiet:
             print_info("Already installed. Checking for updates...")
         try:
-            old_sha, new_sha = pull_repo(clone_path)
+            old_sha, new_sha = pull_repo(clone_path, token=token)
             if old_sha != new_sha:
                 manifest.update_skill(slug, {"commit": new_sha})
                 if json_output:
@@ -1014,6 +1016,8 @@ def update(
     """Pull latest versions for git-installed skills."""
     from .importer.git_ops import is_git_repo, pull_repo
 
+    config = load_config()
+
     if not name and not all_skills:
         print_error(
             "Specify a skill name or use --all",
@@ -1066,7 +1070,7 @@ def update(
             continue
 
         try:
-            old_sha, new_sha = pull_repo(clone_path)
+            old_sha, new_sha = pull_repo(clone_path, token=config.github_token)
             if old_sha != new_sha:
                 manifest.update_skill(slug, {"commit": new_sha})
                 if not json_output and not quiet:
